@@ -308,7 +308,7 @@ class WinBtn(QToolButton):
         if self._hover:
             p.setPen(Qt.NoPen)
             p.setBrush(QColor("#e5484d") if self.kind == "close"
-                       else QColor("#ffffff", 26))
+                       else QColor(255, 255, 255, 26))
             p.drawRoundedRect(QRect(r).adjusted(2, 3, -2, -3), 6, 6)
         pen = QPen(QColor("#ff5555") if (self._hover and self.kind == "close")
                    else QColor("#d0d3d9"))
