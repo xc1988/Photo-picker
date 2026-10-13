@@ -793,7 +793,16 @@ class Viewer(QDialog):
             if t == QEvent.MouseButtonRelease and e.button() == Qt.LeftButton:
                 self._pan = None
                 self.img.unsetCursor()
+            if t == QEvent.MouseButtonDblClick and e.button() == Qt.LeftButton:
+                self._close_or_unfs()       # 与网格"双击开大图"对称
+                return True
         return super().eventFilter(obj, e)
+
+    def _close_or_unfs(self):
+        if self._fs:
+            self._toggle_fs()
+        else:
+            self.close()
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
@@ -954,11 +963,8 @@ class Viewer(QDialog):
             self._toggle_fs()
         elif k == Qt.Key_Tab:
             self._toggle_exif()
-        elif k == Qt.Key_Escape:
-            if self._fs:
-                self._toggle_fs()
-            else:
-                self.close()
+        elif k == Qt.Key_Escape or k == Qt.Key_Space:
+            self._close_or_unfs()
         elif k in (Qt.Key_Left, Qt.Key_A):
             self.move(-1)
         elif k == Qt.Key_Right:
@@ -1147,7 +1153,7 @@ class MainWindow(QMainWindow):
         self.progress.setToolTip("当前第几张 / 总数")
         self.progress.hide()
         self.statusBar().addPermanentWidget(self.progress)
-        self.lbl_hint = QLabel("双击/空格 大图 · Enter 全屏大图 · S 选 D 淘汰 F 清除 · "
+        self.lbl_hint = QLabel("双击/空格 大图（再按返回） · Enter 全屏大图 · S 选 D 淘汰 F 清除 · "
                                "Ctrl/Shift 多选 · 右键批量标记 · Ctrl+滚轮 缩放缩略图")
         self.lbl_hint.setObjectName("dim")
         self.statusBar().addPermanentWidget(self.lbl_hint)
