@@ -6,10 +6,12 @@
 用法：python photopicker.py [照片文件夹]，或双击 择影工具.bat，或拖文件夹到窗口
 """
 import hashlib
+import io
 import json
 import os
 import shutil
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -17,8 +19,8 @@ from PIL import Image, ImageOps
 from PIL.ExifTags import TAGS as EXIF_TAGS
 from PySide6.QtCore import (QAbstractListModel, QModelIndex, QEvent, QPoint,
                             QPointF, QRect, QRectF, QSize, QSettings, Qt,
-                            QThreadPool, QItemSelectionModel, QSortFilterProxyModel,
-                            Signal, QObject)
+                            QThread, QThreadPool, QTimer, QItemSelectionModel,
+                            QSortFilterProxyModel, Signal, QObject)
 from PySide6.QtGui import (QColor, QFont, QIcon, QImage, QImageReader, QPainter,
                            QPainterPath, QPen, QPixmap, QPolygonF, QShortcut)
 from PySide6.QtWidgets import (QApplication, QDialog, QFileDialog,
@@ -28,7 +30,7 @@ from PySide6.QtWidgets import (QApplication, QDialog, QFileDialog,
                                QVBoxLayout, QWidget)
 
 APP = "PhotoPicker"
-VERSION = "1.2.1"
+VERSION = "1.3.0"
 AUTHOR = "DP"
 # PyInstaller 打包后资源在解压目录（sys._MEIPASS），源码运行时在同级 assets/
 if getattr(sys, "frozen", False):
@@ -46,6 +48,7 @@ def set_hidden(path: Path):
         ctypes.windll.kernel32.SetFileAttributesW(str(path), 0x2)  # FILE_ATTRIBUTE_HIDDEN
 THUMB_SIZE, FULL_SIZE = 360, 2200
 CARD_W, CARD_H, IMG_H = 244, 180, 152
+THUMB_CAP = 600          # 常驻内存的缩略图上限（≈200MB），超出的离屏项退回磁盘缓存
 
 RAW_EXTS = {".cr2", ".cr3", ".crw", ".nef", ".nrw", ".arw", ".srf", ".sr2",
             ".raf", ".dng", ".rw2", ".orf", ".pef", ".ptx", ".raw", ".3fr",
@@ -64,38 +67,72 @@ STATUS_META = {
 
 
 # ------------------------------------------------------------- core --------
-def cache_key(path: Path) -> str:
+RAW_PREVIEW_MIN = 320    # 内嵌预览长边至少这么大才拿来当缩略图，否则宁可走后期
+
+
+def cache_key(path: Path, kind="thumb") -> str:
     st = path.stat()
-    return hashlib.md5(f"v2|{path}|{st.st_mtime_ns}|{st.st_size}".encode()).hexdigest()
+    base = f"{path}|{st.st_mtime_ns}|{st.st_size}"
+    # 缩略图升到 v3：生成方式换了（RAW 改用机身内嵌预览），旧缓存不能再用；
+    # 大图仍是 v2，用户已有的 RAW 大图缓存不必全部作废重算
+    return hashlib.md5(f"{'v3' if kind == 'thumb' else 'v2'}|{base}".encode()).hexdigest()
+
+
+def _draft_to(im, max_size):
+    """让 libjpeg 只解到够用的 DCT 档位。按长边等比换算请求尺寸（而非正方形），
+    高像素照片更容易命中 1/8 档（2400 万像素解码量少 4 倍）。"""
+    w, h = im.size
+    if max(w, h) > max_size:
+        long_s, short_s = (w, h) if w >= h else (h, w)
+        im.draft("rgb", (max_size, max(1, max_size * short_s // long_s)))
+
+
+def _scale_and_save(im, dest: Path, max_size):
+    im = ImageOps.exif_transpose(im)
+    im.thumbnail((max_size, max_size))
+    im.convert("RGB").save(dest, "JPEG", quality=85)
 
 
 def make_display_file(path: Path, dest: Path, max_size: int):
     """生成 JPEG 缓存文件（缩略图或 RAW 大图）。线程安全：先写临时再改名。"""
     ext = path.suffix.lower()
-    tmp = dest.with_suffix(".tmp")
+    # 前台与后台可能并行生成同一张，临时名带线程号，避免互相覆写坏文件
+    tmp = dest.with_name(f"{dest.stem}.{threading.get_ident()}.tmp")
     if ext in JPG_EXTS:
         with Image.open(path) as im:
-            im.draft("rgb", (max_size * 2, max_size * 2))
-            im = ImageOps.exif_transpose(im)
-            im.thumbnail((max_size, max_size))
-            im.convert("RGB").save(tmp, "JPEG", quality=85)
+            _draft_to(im, max_size)
+            _scale_and_save(im, tmp, max_size)
     else:
         import rawpy
-        with rawpy.imread(str(path)) as raw:
+        made = False
+        if max_size <= THUMB_SIZE:
+            # 机身内嵌预览（如 RW2 的 1920px JPEG）取出来只要 1ms 上下，
+            # 而 libraw 后期一张要 200ms —— 纯 RAW 夹子的载入速度差在这里
             try:
-                arr = raw.postprocess(use_camera_wb=True,
-                                      half_size=(max_size <= THUMB_SIZE),
-                                      output_bps=8)
+                with rawpy.imread(str(path)) as raw:
+                    th = raw.extract_thumb()
+                if th.format == rawpy.ThumbFormat.JPEG:
+                    with Image.open(io.BytesIO(th.data)) as pim:
+                        if max(pim.size) >= RAW_PREVIEW_MIN:
+                            _draft_to(pim, max_size)
+                            _scale_and_save(pim, tmp, max_size)
+                            made = True
             except Exception:
-                arr = raw.postprocess(output_bps=8)
-        im = Image.fromarray(arr)
-        im.thumbnail((max_size, max_size))
-        im.convert("RGB").save(tmp, "JPEG", quality=85)
+                made = False
+        if not made:
+            with rawpy.imread(str(path)) as raw:
+                try:
+                    arr = raw.postprocess(use_camera_wb=True,
+                                          half_size=(max_size <= THUMB_SIZE),
+                                          output_bps=8)
+                except Exception:
+                    arr = raw.postprocess(output_bps=8)
+            _scale_and_save(Image.fromarray(arr), tmp, max_size)
     os.replace(tmp, dest)
 
 
 def ensure_thumb(display: Path) -> Path:
-    dest = THUMB_DIR / (cache_key(display) + ".jpg")
+    dest = THUMB_DIR / (cache_key(display, "thumb") + ".jpg")
     if not dest.exists():
         make_display_file(display, dest, THUMB_SIZE)
     return dest
@@ -104,7 +141,7 @@ def ensure_thumb(display: Path) -> Path:
 def ensure_full(display: Path) -> Path:
     if display.suffix.lower() in JPG_EXTS:
         return display
-    dest = THUMB_DIR / (cache_key(display) + "_full.jpg")
+    dest = THUMB_DIR / (cache_key(display, "full") + "_full.jpg")
     if not dest.exists():
         make_display_file(display, dest, FULL_SIZE)
     return dest
@@ -184,8 +221,15 @@ class PhotoModel(QAbstractListModel):
     def put_thumb(self, row, pm):
         if row >= len(self.items):
             return
+        self.thumbs.pop(row, None)          # 重新插入到末尾，保持"最早生成在前"
         self.thumbs[row] = pm
         idx = self.index(row)
+        # 常驻内存有上限：淘汰最早生成的（多半早已滚出屏幕），需要时走磁盘缓存秒回
+        while len(self.thumbs) > THUMB_CAP:
+            old = next(iter(self.thumbs))
+            del self.thumbs[old]
+            oi = self.index(old)
+            self.dataChanged.emit(oi, oi, [THUMB])
         self.dataChanged.emit(idx, idx, [THUMB])
 
     def load(self, photos):
@@ -206,46 +250,79 @@ class StatusFilter(QSortFilterProxyModel):
 
 # ------------------------------------------------------------ worker -------
 class Ready(QObject):
-    thumb_done = Signal(int, str)   # row, cache-file-path
-    full_done = Signal(str, str)    # token(display path), file-path
+    thumb_done = Signal(int, str)     # row, cache-file-path
+    bg_done = Signal(int)             # 后台补齐队列推进用
+    full_done = Signal(str, str)      # token(display path), file-path
 
 
 class Pool:
-    def __init__(self, max_threads=4):
+    """缩略图/大图生成池。
+
+    两条队列，各占一份线程：前台只做"看得见"的（视口内的卡片、胶片条邻域），结果
+    直接上屏；后台慢慢把整个文件夹铺进磁盘缓存，完成时不上屏（免得几百张全在 GUI
+    线程解码）。分开的意义是滚动时眼前这张不必排在几百个旧任务后面。
+    """
+    def __init__(self, max_threads=None):
+        # 解码是 CPU 密集的，线程数按核心数放大：固定 4 线程在 12 核机器上只用 1/3
+        if max_threads is None:
+            max_threads = max(4, min(12, QThread.idealThreadCount() - 2))
         self.pool = QThreadPool()
         self.pool.setMaxThreadCount(max_threads)
+        self.bg = QThreadPool()
+        self.bg.setMaxThreadCount(max_threads)
+        self.threads = max_threads
         self.ready = Ready()
-        self.pending = set()
+        self.pending = set()       # 前台在排的 row
+        self.bg_pending = set()    # 后台在排的 row
         self.full_pending = set()
+        self.epoch = 0             # 换夹子后旧任务的回调查不到新模型，直接丢弃
 
     def reset(self):
+        self.epoch += 1
         self.pending.clear()
+        self.bg_pending.clear()
         self.full_pending.clear()
+        self.pool.clear()
+        self.bg.clear()
 
-    def submit_thumb(self, row, display: Path):
-        if row in self.pending:
+    def submit_thumb(self, row, display: Path, bg=False):
+        cur, other = (self.bg_pending, self.pending) if bg \
+            else (self.pending, self.bg_pending)
+        if row in cur:
             return
-        self.pending.add(row)
-        self.pool.start(lambda: self._run(row, str(display), "thumb"))
+        if row in other:
+            # 后台队列里排到了视口 → 交给前台先做；后台那次回头只会命中缓存
+            other.discard(row)
+        cur.add(row)
+        (self.bg if bg else self.pool).start(
+            lambda epoch=self.epoch: self._run_thumb(row, str(display), bg, epoch))
 
     def submit_full(self, token, display: Path):
         if token in self.full_pending:
             return
         self.full_pending.add(token)
-        self.pool.start(lambda: self._run(str(token), str(display), "full"))
+        self.pool.start(lambda: self._run_full(str(token), str(display)))
 
-    def _run(self, key, path_str, mode):
+    def _run_thumb(self, row, path_str, is_bg, epoch):
         try:
-            p = ensure_thumb(Path(path_str)) if mode == "thumb" \
-                else ensure_full(Path(path_str))
-            result = str(p)
+            result = str(ensure_thumb(Path(path_str)))
         except Exception:
             result = ""
-        if mode == "thumb":
-            self.pending.discard(key)
-            self.ready.thumb_done.emit(key, result)
-        else:
-            self.full_pending.discard(key)
+        if epoch != self.epoch:
+            return          # 已换文件夹：磁盘缓存照样留下，但不碰新模型的状态
+        (self.bg_pending if is_bg else self.pending).discard(row)
+        if is_bg:
+            self.ready.bg_done.emit(row)
+        elif result:
+            self.ready.thumb_done.emit(row, result)
+
+    def _run_full(self, token, path_str):
+        try:
+            result = str(ensure_full(Path(path_str)))
+        except Exception:
+            result = ""
+        self.full_pending.discard(token)
+        if result:
             self.ready.full_done.emit(path_str, result)
 
 
@@ -338,6 +415,7 @@ class WinBtn(QToolButton):
 class FilmStrip(QWidget):
     """底部胶片条：横向缩略图，点击跳转，当前张高亮，滚轮横滚"""
     clicked = Signal(int)          # proxy 位置
+    needed = Signal(list)          # 这些 proxy 位置需要缩略图
 
     def __init__(self, model, proxy, parent=None):
         super().__init__(parent)
@@ -371,6 +449,16 @@ class FilmStrip(QWidget):
         self.offset = max(0, min(self.offset,
                                  max(0, self._total_w() - vw)))
 
+    def _ensure_thumbs(self):
+        """把视口内的胶片格上报，由主窗口按需取缩略图（离屏的交给缓存上限淘汰）"""
+        n = self.proxy.rowCount()
+        if n == 0 or self.width() <= 0:
+            return
+        step = self.cell_w + self.gap
+        lo = max(0, int(self.offset // step) - 1)
+        hi = min(n - 1, int((self.offset + self.width()) // step) + 1)
+        self.needed.emit(list(range(lo, hi + 1)))
+
     def paintEvent(self, e):
         p = QPainter(self)
         p.setRenderHint(QPainter.SmoothPixmapTransform)
@@ -396,6 +484,7 @@ class FilmStrip(QWidget):
                 p.setBrush(Qt.NoBrush)
                 p.drawRoundedRect(QRect(cell).adjusted(1, 1, -1, -1), 4, 4)
         p.end()
+        self._ensure_thumbs()
 
     def mousePressEvent(self, e):
         i = (e.position().x() + self.offset) // (self.cell_w + self.gap)
@@ -537,6 +626,7 @@ class Viewer(QDialog):
         striprow.setContentsMargins(0, 0, 0, 0)
         self.strip = FilmStrip(model, proxy)
         self.strip.clicked.connect(self._jump)
+        self.strip.needed.connect(self._on_strip_needed)
         striprow.addWidget(self.strip, 1)
         lay.addWidget(self._stripbox)
         model.dataChanged.connect(lambda *a: self.strip.update())
@@ -597,6 +687,11 @@ class Viewer(QDialog):
             return
         self.idx = pos
         self.refresh()
+
+    def _on_strip_needed(self, positions):
+        rows = [self.proxy.mapToSource(self.proxy.index(i, 0)).row()
+                for i in positions]
+        self.win.request_thumb_rows([r for r in rows if r >= 0])
 
     def refresh(self):
         row = self.current_src_row()
@@ -1053,6 +1148,7 @@ class MainWindow(QMainWindow):
         self.folder = None
         self.pool = Pool()
         self.pool.ready.thumb_done.connect(self._thumb_ready)
+        self.pool.ready.bg_done.connect(self._fill_bg)   # 后台补齐：做完一张接下一张
 
         self.model = PhotoModel()
         self.proxy = StatusFilter()
@@ -1082,6 +1178,15 @@ class MainWindow(QMainWindow):
         self.view.viewport().setMouseTracking(True)
         self.view.card_zoom.connect(self._card_zoom)
         self.setCentralWidget(self.view)
+
+        # 缩略图按需生成：滚动/缩放/换筛选后合并成一次请求（60ms 内的连续滚动只算一遍）
+        self._bg_cursor = 0
+        self._thumb_timer = QTimer(self)
+        self._thumb_timer.setSingleShot(True)
+        self._thumb_timer.setInterval(60)
+        self._thumb_timer.timeout.connect(self._request_thumbs)
+        self.view.verticalScrollBar().valueChanged.connect(
+            lambda _v: self._thumb_timer.start())
 
         # 空状态引导（覆盖在网格中央，加载照片后自动隐藏）
         # 用两个纯文本标签：富文本(RichText)会绕过灰度抗锯齿仍走 ClearType
@@ -1185,6 +1290,7 @@ class MainWindow(QMainWindow):
         # 固定行距/列距：防止 IconMode 把行间距拉伸填满视口
         self.view.setGridSize(QSize(round((CARD_W + 8) * s), round((CARD_H + 8) * s)))
         self.view.reset()               # 使 sizeHint 缓存失效，重新布局
+        self._thumb_timer.start()       # 一屏能放下的张数变了 → 重新划定请求范围
 
     def _card_zoom(self, up):
         lo, hi = 0.6, 2.2
@@ -1345,27 +1451,74 @@ class MainWindow(QMainWindow):
         photos = scan_folder(folder)
         self.folder = folder
         self.pool.reset()
+        self._bg_cursor = 0
         self.model.load(photos)
         self._prog_row = -1
         self.view.scrollToTop()            # 换文件夹回到网格顶部
         self.settings.setValue("lastFolder", str(folder))
         self.setWindowTitle(f"择影 · {folder.name or folder}")
         self.lbl_folder.setText(folder.name or str(folder))
-        for row in range(len(photos)):
-            self.pool.submit_thumb(row, photos[row]["display"])
+        self._request_thumbs()             # 先做看得见的这一屏
+        QTimer.singleShot(0, self._request_thumbs)   # 视口尺寸定稿后再补一次
         self._update_stats()
         self.statusBar().showMessage(
             f"{len(photos)} 张照片（{sum(1 for p in photos if p['kind'] == 'RAW+JPG')} 组 RAW+JPG 已合并）"
             f"  {time.time() - t0:.2f}s", 5000)
 
     # ---- thumbs ----
+    def _visible_rows(self):
+        """当前视口（上下各多留一行）对应的 source row 集合，O(可见卡片数)"""
+        vp, n = self.view.viewport(), self.proxy.rowCount()
+        if n == 0 or vp.width() < 60 or vp.height() < 60:
+            return set()
+        g = self.view.gridSize()
+        cw, ch = max(1, g.width()), max(1, g.height())
+        cols = max(1, (vp.width() - 20) // cw)
+        first = self.view.indexAt(QPoint(12, 8))
+        top = first.row() if first.isValid() else 0
+        lo = max(0, top - cols)
+        hi = min(n - 1, top + (1 + vp.height() // ch + 1) * cols)
+        return {self.proxy.mapToSource(self.proxy.index(i, 0)).row()
+                for i in range(lo, hi + 1)}
+
+    def request_thumb_rows(self, rows):
+        """为这些行排生成任务（已有缩略图或在途的跳过）"""
+        items, pending = self.model.items, self.pool.pending
+        for row in rows:
+            if not 0 <= row < len(items):
+                continue
+            if row in self.model.thumbs or row in pending:
+                continue
+            self.pool.submit_thumb(row, items[row]["display"])
+
+    def _request_thumbs(self):
+        self.request_thumb_rows(sorted(self._visible_rows()))
+        self._fill_bg()
+
+    def _fill_bg(self):
+        """滑动窗口式把整夹铺进磁盘缓存：前台一空下来就干活，每完成一张补一张。
+        滚到哪看到哪，但这一夹迟早是全缓存好的，下次进来直接命中。"""
+        pool = self.pool
+        if pool.pending:
+            return                       # 前台正忙，不抢它的算力
+        room = pool.threads - len(pool.bg_pending)
+        items, thumbs = self.model.items, self.model.thumbs
+        while self._bg_cursor < len(items) and room > 0:
+            row = self._bg_cursor
+            self._bg_cursor += 1
+            if row in thumbs or row in pool.pending or row in pool.bg_pending:
+                continue
+            pool.submit_thumb(row, items[row]["display"], bg=True)
+            room -= 1
+
     def _thumb_ready(self, row, path_str):
-        if not path_str or row < 0:
+        if not path_str or not 0 <= row < len(self.model.items):
             return
         img = QImage()
         if not img.load(path_str):
             return
         self.model.put_thumb(row, QPixmap.fromImage(img))
+        self._fill_bg()
 
     # ---- marking ----
     def selected_src_rows(self):
@@ -1483,6 +1636,8 @@ class MainWindow(QMainWindow):
         super().resizeEvent(e)
         if hasattr(self, "empty_hint"):
             self._place_empty_hint()
+        if hasattr(self, "_thumb_timer"):
+            self._thumb_timer.start()    # 视口变大 → 多出来的那些也要图
 
     # ---- navigation / viewer ----
     def _current_src_row(self):
@@ -1513,6 +1668,7 @@ class MainWindow(QMainWindow):
         self.proxy.wanted = key
         self.proxy.invalidateFilter()
         self._update_filter_ui()
+        self._thumb_timer.start()      # 过滤后视口里是另一批照片
 
     def _update_filter_ui(self):
         for key, (label, b) in self.filter_btns.items():
@@ -1559,6 +1715,7 @@ class MainWindow(QMainWindow):
                 break
 
     def closeEvent(self, e):
+        self.pool.bg.clear()          # 后台补齐的活不必等它干完
         self.pool.pool.waitForDone(1500)
         super().closeEvent(e)
 

@@ -18,6 +18,12 @@ pip install -r requirements.txt
 python photopicker.py [照片文件夹]      # 或双击 择影工具.bat
 ```
 
+## 载入速度
+
+缩略图只在需要时生成：视口内先出图，整夹再在后台慢慢铺进磁盘缓存，所以滚动到夹子末尾也不用排队等前面的任务；常驻内存的缩略图有上限，退出屏幕的退回磁盘缓存。
+
+纯 RAW 夹子（如松下 RW2）的缩略图直接取相机内嵌的那张预览图，比完整后期快一个数量级——1200 张 RAW 首屏约 0.1 秒。代价是网格里的观感就是相机回看的观感：夜景会比后期渲染略暗，和 Lightroom 图库模块一致；双击进大图仍按 RAW 完整后期渲染，所以夜景从网格进大图会有轻微亮度跳变。JPG、以及 RAW+JPG 配对的夹子不受影响。
+
 ## 大图与 EXIF
 
 大图模式没有工具栏，只有画面和底部一条胶片导航；点当前高亮那张即关闭。
@@ -59,5 +65,5 @@ pyinstaller --noconfirm --clean PhotoPicker.spec     # 产物在 dist/PhotoPicke
 
 ## 技术栈
 
-PySide6（单文件约 1300 行）· Pillow + rawpy 解码 · `QSortFilterProxyModel` 做状态筛选 ·
-无边框窗口 + 自绘窗控 + DWM 圆角 · 线程池预取邻图。
+PySide6（单文件约 1750 行）· Pillow + rawpy 解码 · `QSortFilterProxyModel` 做状态筛选 ·
+无边框窗口 + 自绘窗控 + DWM 圆角 · 前后台双线程池按需生成缩略图。
