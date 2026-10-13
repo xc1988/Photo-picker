@@ -28,7 +28,7 @@ from PySide6.QtWidgets import (QApplication, QDialog, QFileDialog,
                                QVBoxLayout, QWidget)
 
 APP = "PhotoPicker"
-VERSION = "1.2.0"
+VERSION = "1.2.1"
 AUTHOR = "DP"
 # PyInstaller 打包后资源在解压目录（sys._MEIPASS），源码运行时在同级 assets/
 if getattr(sys, "frozen", False):
