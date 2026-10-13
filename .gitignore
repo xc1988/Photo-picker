@@ -3,3 +3,6 @@ __pycache__/
 out_test/
 server.log
 .photopicker.json
+dist/
+build/
+*.spec

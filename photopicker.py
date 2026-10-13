@@ -30,7 +30,11 @@ from PySide6.QtWidgets import (QApplication, QDialog, QFileDialog,
 APP = "PhotoPicker"
 VERSION = "1.1.0"
 AUTHOR = "DP"
-ASSETS = Path(__file__).resolve().parent / "assets"
+# PyInstaller 打包后资源在解压目录（sys._MEIPASS），源码运行时在同级 assets/
+if getattr(sys, "frozen", False):
+    ASSETS = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent)) / "assets"
+else:
+    ASSETS = Path(__file__).resolve().parent / "assets"
 THUMB_DIR = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / APP / "thumbs"
 THUMB_DIR.mkdir(parents=True, exist_ok=True)
 STATE_FILE = ".photopicker.json"

@@ -1,0 +1,54 @@
+name: 打包发布
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+
+      - name: PyInstaller 打包
+        run: >
+          pyinstaller --noconfirm --clean --windowed
+          --name PhotoPicker
+          --icon assets/app.ico
+          --add-data "assets;assets"
+          --collect-binaries rawpy
+          photopicker.py
+
+      - name: 压缩产物
+        id: pack
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF_TYPE -eq "tag") { $v = $env:GITHUB_REF_NAME }
+          else { $v = "v" + (Select-String -Path photopicker.py -Pattern '^VERSION = "(.+)"').Matches[0].Groups[1].Value }
+          "ver=$v" >> $env:GITHUB_OUTPUT
+          $zip = "PhotoPicker-$v-win-x64.zip"
+          if (Test-Path $zip) { Remove-Item $zip }
+          Compress-Archive -Path dist/PhotoPicker -DestinationPath $zip
+
+      - name: 发布 Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.pack.outputs.ver }}
+          name: 选片工具 ${{ steps.pack.outputs.ver }}
+          body: |
+            Windows x64 免安装包：解压后双击 `PhotoPicker/PhotoPicker.exe`，或把照片文件夹拖到图标上。
+            快捷键：S 选 · D 淘汰 · F 清除 · Enter 大图 · Tab EXIF · Esc 返回。
+          files: PhotoPicker-${{ steps.pack.outputs.ver }}-win-x64.zip
