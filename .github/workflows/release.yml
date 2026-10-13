@@ -24,13 +24,7 @@ jobs:
           pip install -r requirements.txt pyinstaller
 
       - name: PyInstaller 打包
-        run: >
-          pyinstaller --noconfirm --clean --windowed
-          --name PhotoPicker
-          --icon assets/app.ico
-          --add-data "assets;assets"
-          --collect-binaries rawpy
-          photopicker.py
+        run: pyinstaller --noconfirm --clean PhotoPicker.spec
 
       - name: 压缩产物
         id: pack
