@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>选片 · Photo Picker</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<header>
+  <div class="brand">选片<span>PHOTO&nbsp;PICKER</span></div>
+  <div class="folder" id="folderLabel" title="点击更换文件夹">未选择文件夹</div>
+  <div class="spacer"></div>
+  <div class="stats" id="stats"></div>
+  <button class="btn primary" id="btnExport">导出已选</button>
+</header>
+
+<nav id="tabs">
+  <button data-f="all" class="on">全部</button>
+  <button data-f="todo">待选</button>
+  <button data-f="pick">已选</button>
+  <button data-f="no">已废</button>
+</nav>
+
+<main>
+  <div id="empty" class="empty hidden">
+    <div class="empty-icon">◐</div>
+    <p>选择一个照片文件夹开始选片</p>
+    <p class="sub">同名 RAW + JPG 会自动合并为一张照片显示</p>
+    <button class="btn primary big" id="btnPick0">打开文件夹</button>
+  </div>
+  <div id="grid" class="grid"></div>
+</main>
+
+<!-- 大图查看 -->
+<div id="viewer" class="viewer hidden">
+  <div class="viewer-top">
+    <span id="vName"></span>
+    <span id="vIdx" class="dim"></span>
+    <div class="spacer"></div>
+    <button class="btn" id="vClose">关闭 Esc</button>
+  </div>
+  <div class="viewer-mid">
+    <button class="nav" id="vPrev">‹</button>
+    <img id="vImg" alt="">
+    <button class="nav" id="vNext">›</button>
+  </div>
+  <div class="viewer-bar">
+    <button class="mark pick"  data-s="pick" id="mPick">✓ 选它&nbsp;<kbd>S</kbd></button>
+    <button class="mark no"    data-s="no"   id="mNo">✕ 淘汰&nbsp;<kbd>X</kbd></button>
+    <button class="mark clear" data-s=""      id="mClear">↺ 清除&nbsp;<kbd>Z</kbd></button>
+  </div>
+</div>
+
+<!-- 文件夹浏览弹窗 -->
+<div id="browse" class="modal hidden">
+  <div class="modal-box">
+    <div class="modal-head">
+      <span id="bPath" class="dim"></span>
+      <div class="spacer"></div>
+      <button class="btn" id="bUp">↑ 上级</button>
+      <button class="btn" id="bClose">取消</button>
+    </div>
+    <div class="modal-list" id="bList"></div>
+    <div class="modal-foot">
+      <button class="btn primary" id="bChoose">选择此文件夹</button>
+    </div>
+  </div>
+</div>
+
+<!-- 导出弹窗 -->
+<div id="export" class="modal hidden">
+  <div class="modal-box">
+    <div class="modal-head"><span>导出已选照片到</span></div>
+    <input type="text" id="ePath" class="path-input">
+    <div class="modal-list" id="eList"></div>
+    <div class="modal-foot">
+      <button class="btn" id="eCancel">取消</button>
+      <button class="btn primary" id="eGo">复制到此处</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+<script src="/static/app.js"></script>
+</body>
+</html>
