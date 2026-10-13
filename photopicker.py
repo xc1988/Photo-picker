@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
-"""摄影师选片工具 · PySide6 桌面版（单文件，方便拷贝到其他电脑）
+"""摄影师择影工具 · PySide6 桌面版（单文件，方便拷贝到其他电脑）
 
 功能：RAW+JPG 同名合并显示 / 磁盘缩略图缓存 / 键盘快速标记 / 导出已选(成对复制)
 依赖：pip install PySide6 Pillow rawpy
-用法：python photopicker.py [照片文件夹]，或双击 选片工具.bat，或拖文件夹到窗口
+用法：python photopicker.py [照片文件夹]，或双击 择影工具.bat，或拖文件夹到窗口
 """
 import hashlib
 import json
@@ -507,7 +507,7 @@ class Viewer(QDialog):
 
     def __init__(self, win, model, proxy):
         super().__init__(win)
-        self.setWindowTitle("选片 · 大图")
+        self.setWindowTitle("择影 · 大图")
         self.setWindowFlags(Qt.Dialog | Qt.FramelessWindowHint)
         self.win, self.model, self.proxy = win, model, proxy
         self.idx = -1            # proxy 中的位置
@@ -1036,7 +1036,7 @@ QScrollBar::add-page, QScrollBar::sub-page { background:transparent }
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("选片 · Photo Picker")
+        self.setWindowTitle("择影 · Photo Picker")
         self.setObjectName("mainWin")
         self.setStyleSheet(DARK)
         self.resize(1280, 800)
@@ -1084,7 +1084,7 @@ class MainWindow(QMainWindow):
         eh = QVBoxLayout(self.empty_hint)
         eh.setContentsMargins(0, 0, 0, 0)
         eh.setSpacing(6)
-        t1 = QLabel("打开文件夹开始选片")
+        t1 = QLabel("打开文件夹开始择影")
         t1.setAlignment(Qt.AlignCenter)
         t2 = QLabel("也可以直接把文件夹拖进窗口")
         t2.setAlignment(Qt.AlignCenter)
@@ -1099,7 +1099,7 @@ class MainWindow(QMainWindow):
         tb.setStyleSheet("border-bottom:1px solid #23252c")
         tb.installEventFilter(self)
         self._tb = tb
-        # 标题位置用"择"字 logo（V13 定稿 PNG），文字"选片"不再显示；点击弹关于窗
+        # 标题位置用"择"字 logo（V13 定稿 PNG），文字"择影"不再显示；点击弹关于窗
         brand = QLabel()
         if (ASSETS / "logo-ze.png").exists():
             brand.setPixmap(self._logo_pixmap())
@@ -1107,7 +1107,7 @@ class MainWindow(QMainWindow):
             brand.setToolTip("关于")
             brand.mousePressEvent = lambda e: self._show_about()
         else:
-            brand.setText("  选片")
+            brand.setText("  择影")
             brand.setObjectName("title")
         sub = QLabel("用心选择每一刻")
         sub.setStyleSheet("color:#e8912a")
@@ -1217,7 +1217,7 @@ class MainWindow(QMainWindow):
         slogan.setAlignment(Qt.AlignCenter)
         slogan.setStyleSheet("color:#e8912a")
         lay.addWidget(slogan)           # 标语在 logo 正下方，间距收紧
-        name = QLabel("选片 · Photo Picker")
+        name = QLabel("择影 · Photo Picker")
         name.setAlignment(Qt.AlignCenter)
         name.setStyleSheet("font-size:16px;font-weight:700")
         lay.addSpacing(6)
@@ -1343,7 +1343,7 @@ class MainWindow(QMainWindow):
         self._prog_row = -1
         self.view.scrollToTop()            # 换文件夹回到网格顶部
         self.settings.setValue("lastFolder", str(folder))
-        self.setWindowTitle(f"选片 · {folder.name or folder}")
+        self.setWindowTitle(f"择影 · {folder.name or folder}")
         self.lbl_folder.setText(folder.name or str(folder))
         for row in range(len(photos)):
             self.pool.submit_thumb(row, photos[row]["display"])

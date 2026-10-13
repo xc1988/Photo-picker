@@ -41,7 +41,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.pack.outputs.ver }}
-          name: 选片工具 ${{ steps.pack.outputs.ver }}
+          name: 择影 ${{ steps.pack.outputs.ver }}
           body: |
             Windows x64 免安装包：解压后双击 `PhotoPicker/PhotoPicker.exe`，或把照片文件夹拖到图标上。
             快捷键：S 选 · D 淘汰 · F 清除 · Enter 大图 · Tab EXIF · Esc 返回。
